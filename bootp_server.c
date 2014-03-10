@@ -23,9 +23,18 @@
 //
 //*****************************************************************************
 
-#include <winsock2.h>
+//#include <winsock2.h>
+#include <unistd.h>
 #include <stdio.h>
+#include <string.h>
+#include <strings.h>
 #include <stdlib.h>
+#include <stdint.h>
+#include <errno.h>
+#include <sys/socket.h>
+#include <sys/select.h>
+#include <netinet/in.h>
+#include <netinet/ip.h>
 #include "bootp_server.h"
 #include "eflash.h"
 
@@ -34,68 +43,68 @@
 // This structure defines the fields in a BOOTP request/reply packet.
 //
 //*****************************************************************************
-typedef struct
+typedef struct __attribute__ ((__packed__))
 {
     //
     // The operation; 1 is a request, 2 is a reply.
     //
-    unsigned char ucOp;
+    uint8_t ucOp;
 
     //
     // The hardware type; 1 is Ethernet.
     //
-    unsigned char ucHType;
+    uint8_t ucHType;
 
     //
     // The hardware address length; for Ethernet this will be 6, the length of
     // the MAC address.
     //
-    unsigned char ucHLen;
+    uint8_t ucHLen;
 
     //
     // Hop count, used by gateways for cross-gateway booting.
     //
-    unsigned char ucHops;
+    uint8_t ucHops;
 
     //
     // The transaction ID.
     //
-    unsigned long ulXID;
+    uint32_t ulXID;
 
     //
     // The number of seconds elapsed since the client started trying to boot.
     //
-    unsigned short usSecs;
+    uint16_t usSecs;
 
     //
     // The BOOTP flags.
     //
-    unsigned short usFlags;
+    uint16_t usFlags;
 
     //
     // The client's IP address, if it knows it.
     //
-    unsigned long ulCIAddr;
+    uint32_t ulCIAddr;
 
     //
     // The client's IP address, as assigned by the BOOTP server.
     //
-    unsigned long ulYIAddr;
+    uint32_t ulYIAddr;
 
     //
     // The TFTP server's IP address.
     //
-    unsigned long ulSIAddr;
+    uint32_t ulSIAddr;
 
     //
     // The gateway IP address, if booting cross-gateway.
     //
-    unsigned long ulGIAddr;
+    uint32_t ulGIAddr;
 
     //
     // The hardware address; for Ethernet this is the MAC address.
     //
-    unsigned char pucCHAddr[16];
+    uint8_t pucCHAddr[16];
 
     //
     // The name, or nickname, of the server that should handle this BOOTP
@@ -139,15 +148,15 @@ tBOOTPPacket;
 // The UDP ports used by the BOOTP protocol.
 //
 //*****************************************************************************
-#define BOOTP_SERVER_PORT       67
-#define BOOTP_CLIENT_PORT       68
+#define BOOTP_SERVER_PORT       (40000+67)
+#define BOOTP_CLIENT_PORT       (40000+68)
 
 //*****************************************************************************
 //
 // The UDP port for the TFTP server.
 //
 //*****************************************************************************
-#define TFTP_PORT               69
+#define TFTP_PORT               (40000+69)
 
 //*****************************************************************************
 //
@@ -156,7 +165,7 @@ tBOOTPPacket;
 // by some Wake-On-LAN implementations.
 //
 //*****************************************************************************
-#define MPACKET_PORT             9
+#define MPACKET_PORT             (40000+9)
 
 //*****************************************************************************
 //
@@ -212,8 +221,8 @@ CreateSocket(unsigned long ulAddress, unsigned long ulPort,
     if(setsockopt(sRet, SOL_SOCKET, SO_BROADCAST, (const char *)&bBroadcast,
                sizeof(unsigned long)) == SOCKET_ERROR)
 	{
-        int iTmp = WSAGetLastError();
-        closesocket(sRet);
+        int iTmp = errno;
+        close(sRet);
         return(INVALID_SOCKET);
 	}
 
@@ -222,14 +231,15 @@ CreateSocket(unsigned long ulAddress, unsigned long ulPort,
     //
     if(bBind)
     {
-        memset(&sAddr, 0, sizeof(sAddr));
+        memset((void *)&sAddr, 0, sizeof(sAddr));
         sAddr.sin_family = AF_INET;
-        sAddr.sin_addr.s_addr = ulAddress;
-        sAddr.sin_port = (USHORT)ulPort;
+        sAddr.sin_addr.s_addr = INADDR_ANY; //ulAddress;
+        sAddr.sin_port = (in_port_t)ulPort;
         if(bind(sRet, (struct sockaddr *)&sAddr, sizeof(sAddr)) == SOCKET_ERROR)
         {
-            int iTmp = WSAGetLastError();
-            closesocket(sRet);
+            int iTmp = errno;
+            close(sRet);
+            printf("bind error %d %s\n", iTmp, strerror(iTmp));
             return(INVALID_SOCKET);
         }
     }
@@ -337,7 +347,7 @@ SendFirmwareUpdateMagicPacket(SOCKET sSocket, unsigned char *pucMACAddr)
         for(iMACLoop = 0; iMACLoop < MPACKET_MAC_LEN; iMACLoop++)
         {
             pucPacket[MPACKET_HEADER_LEN +
-                      (iLoop * MPACKET_MAC_LEN) + iMACLoop] = 
+                      (iLoop * MPACKET_MAC_LEN) + iMACLoop] =
                                                     pucMACAddr[iMACLoop];
         }
     }
@@ -421,7 +431,7 @@ StartBOOTPUpdate(unsigned char *pucMACAddr, unsigned long ulLocalAddr,
     //
     // Allocate a buffer to hold the file contents.
     //
-    VPRINTF(("... Allocating buffer for file length %u\n", ulFileLen));
+    VPRINTF(("... Allocating buffer for file length %lu\n", ulFileLen));
     pcFileData = (char *)malloc(ulFileLen);
     if(!pcFileData)
     {
@@ -468,7 +478,7 @@ StartBOOTPUpdate(unsigned char *pucMACAddr, unsigned long ulLocalAddr,
     {
         EPRINTF(("Cannot allocate socket\n"));
         free(pcFileData);
-        closesocket(sBOOTP);
+        close(sBOOTP);
         return(ERROR_TFTPD);
     }
 
@@ -480,8 +490,8 @@ StartBOOTPUpdate(unsigned char *pucMACAddr, unsigned long ulLocalAddr,
     {
         EPRINTF(("Cannot allocate socket\n"));
         free(pcFileData);
-        closesocket(sTFTP);
-        closesocket(sBOOTP);
+        close(sTFTP);
+        close(sBOOTP);
         return(ERROR_MPACKET);
     }
 
@@ -500,7 +510,7 @@ StartBOOTPUpdate(unsigned char *pucMACAddr, unsigned long ulLocalAddr,
     // Clear the flag that indicates that the BOOTP server should be aborted.
     //
     g_bAbortBOOTP = 0;
-  
+
     //
     // Send an initial remote firmware magic packet.
     //
@@ -530,8 +540,8 @@ StartBOOTPUpdate(unsigned char *pucMACAddr, unsigned long ulLocalAddr,
         //
         // Set a timeout of 500ms.
         //
-        sTime.tv_sec = 0;
-        sTime.tv_usec = 500000;
+        sTime.tv_sec = 5; //0;
+        sTime.tv_usec = 0; //500000;
 
         //
         // Display additional status about what type of packet we are
@@ -542,8 +552,14 @@ StartBOOTPUpdate(unsigned char *pucMACAddr, unsigned long ulLocalAddr,
         //
         // Wait until there is a packet to be read on one of the open sockets.
         //
-        if(select(iAddrLen + 1, &sDescriptors, 0, 0, &sTime) != 0)
+        int ret = select(iAddrLen + 1, &sDescriptors, 0, 0, &sTime);
+        if(ret != 0)
         {
+            if(ret == -1)
+            {
+                printf("error with select %d, %s\n", errno, strerror(errno));
+                exit(1);
+            }
             //
             // See if there is a packet waiting to be read from the BOOTP port.
             //
@@ -556,7 +572,7 @@ StartBOOTPUpdate(unsigned char *pucMACAddr, unsigned long ulLocalAddr,
                 iAddrLen = sizeof(sAddr);
                 if(recvfrom(sBOOTP, (char *)pcPacketData,
                             sizeof(pcPacketData), 0, (struct sockaddr *)&sAddr,
-                            &iAddrLen) != SOCKET_ERROR)
+                            (unsigned int *)&iAddrLen) != SOCKET_ERROR)
                 {
                     //
                     // Make sure this is a valid BOOTP request.
@@ -567,7 +583,7 @@ StartBOOTPUpdate(unsigned char *pucMACAddr, unsigned long ulLocalAddr,
                        (pPacket->ucHLen == 6) &&
                        (pucMACAddr ?
                         memcmp(pPacket->pucCHAddr, pucMACAddr, 6) == 0 : 1) &&
-                       (stricmp(pPacket->pcSName, "stellaris") == 0))
+                       (strcasecmp(pPacket->pcSName, "stellaris") == 0))
                     {
                         VPRINTF(("... Generating BOOTP response\n"));
                         //
@@ -621,8 +637,8 @@ StartBOOTPUpdate(unsigned char *pucMACAddr, unsigned long ulLocalAddr,
                 VPRINTF(("... Reading TFTP packet\n"));
                 iAddrLen = sizeof(sAddr);
                 if(recvfrom(sTFTP, (char *)pcPacketData, sizeof(pcPacketData),
-                            0, (struct sockaddr *)&sAddr, &iAddrLen) !=
-                        SOCKET_ERROR)
+                            0, (struct sockaddr *)&sAddr,
+                            (unsigned int *)&iAddrLen) != SOCKET_ERROR)
                 {
                     //
                     // Make sure this is a RRQ request.
@@ -660,7 +676,7 @@ StartBOOTPUpdate(unsigned char *pucMACAddr, unsigned long ulLocalAddr,
                         if(sTFTPData != INVALID_SOCKET)
                         {
                             VPRINTF(("... Restarting TFTP session\n"));
-                            closesocket(sTFTPData);
+                            close(sTFTPData);
                         }
 
                         //
@@ -682,7 +698,7 @@ StartBOOTPUpdate(unsigned char *pucMACAddr, unsigned long ulLocalAddr,
                         //
                         // Generate the TFTP data packet.
                         //
-                        VPRINTF(("... Building TFTP packet (Block %d)\n",
+                        VPRINTF(("... Building TFTP packet (Block %lu)\n",
                                 ulBlockNum));
                         ulLen = BuildTFTPDataPacket(pcFileData, ulFileLen,
                                                     pcPacketData, ulBlockNum);
@@ -690,7 +706,7 @@ StartBOOTPUpdate(unsigned char *pucMACAddr, unsigned long ulLocalAddr,
                         //
                         // Send the TFTP data packet.
                         //
-                        VPRINTF(("... Sending TFTP data packet (Block %d)\n",
+                        VPRINTF(("... Sending TFTP data packet (Block %lu)\n",
                                 ulBlockNum));
                         sendto(sTFTPData, (char *)pcPacketData, ulLen, 0,
                                (struct sockaddr *)&sAddr, iAddrLen);
@@ -718,7 +734,7 @@ StartBOOTPUpdate(unsigned char *pucMACAddr, unsigned long ulLocalAddr,
                 iAddrLen = sizeof(sAddr);
                 if(recvfrom(sTFTPData, (char *)pcPacketData,
                             sizeof(pcPacketData), 0, (struct sockaddr *)&sAddr,
-                            &iAddrLen) != SOCKET_ERROR)
+                            (unsigned int *)&iAddrLen) != SOCKET_ERROR)
                 {
                     //
                     // See if this is an ACK.
@@ -757,7 +773,7 @@ StartBOOTPUpdate(unsigned char *pucMACAddr, unsigned long ulLocalAddr,
                         //
                         // Generate the TFTP data packet.
                         //
-                        VPRINTF(("... Building TFTP packet (Block %d)\n",
+                        VPRINTF(("... Building TFTP packet (Block %lu)\n",
                                 ulBlockNum));
                         ulLen = BuildTFTPDataPacket(pcFileData, ulFileLen,
                                                     pcPacketData, ulBlockNum);
@@ -765,7 +781,7 @@ StartBOOTPUpdate(unsigned char *pucMACAddr, unsigned long ulLocalAddr,
                         //
                         // Send the TFTP data packet.
                         //
-                        VPRINTF(("... Sending TFTP data packet (Block %d)\n",
+                        VPRINTF(("... Sending TFTP data packet (Block %lu)\n",
                                 ulBlockNum));
                         sendto(sTFTPData, (char *)pcPacketData, ulLen, 0,
                                (struct sockaddr *)&sAddr, iAddrLen);
@@ -796,7 +812,7 @@ StartBOOTPUpdate(unsigned char *pucMACAddr, unsigned long ulLocalAddr,
                 // Generate a TFTP data packet for the most recently sent
                 // block.
                 //
-                VPRINTF(("... Rebuilding TFTP data packet (Block %d)\n",
+                VPRINTF(("... Rebuilding TFTP data packet (Block %lu)\n",
                         ulBlockNum));
                 ulLen = BuildTFTPDataPacket(pcFileData, ulFileLen,
                                             pcPacketData, ulBlockNum);
@@ -804,7 +820,7 @@ StartBOOTPUpdate(unsigned char *pucMACAddr, unsigned long ulLocalAddr,
                 //
                 // Resend the most recent TFTP data packet.
                 //
-                VPRINTF(("Resending TFTP data packet (Block %d)\n",
+                VPRINTF(("Resending TFTP data packet (Block %lu)\n",
                         ulBlockNum));
                 sendto(sTFTPData, (char *)pcPacketData, ulLen, 0,
                        (struct sockaddr *)&sAddr, iAddrLen);
@@ -837,10 +853,10 @@ StartBOOTPUpdate(unsigned char *pucMACAddr, unsigned long ulLocalAddr,
     // Close the sockets.
     //
     VPRINTF(("Closing network connections\n"));
-    closesocket(sTFTPData);
-    closesocket(sTFTP);
-    closesocket(sBOOTP);
-    closesocket(sUpdateSocket);
+    close(sTFTPData);
+    close(sTFTP);
+    close(sBOOTP);
+    close(sUpdateSocket);
 
     //
     // Return success.

@@ -33,6 +33,16 @@
 //*****************************************************************************
 #include <stdio.h>
 
+typedef struct hostent HOSTENT;
+typedef struct sockaddr SOCKADDR;
+typedef struct timeval TIMEVAL;
+typedef int SOCKET;
+typedef int BOOL;
+#define INVALID_SOCKET (-1)
+#define SOCKET_ERROR (-1)
+#define TRUE 1
+#define FALSE 0
+
 //*****************************************************************************
 //
 // Global variables and macros used for "printf" output.

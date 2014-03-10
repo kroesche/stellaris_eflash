@@ -23,15 +23,15 @@
 //
 //*****************************************************************************
 
-#include <winsock2.h>
 #include <errno.h>
-#include <windows.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <getopt.h>
 #include <ctype.h>
 #include <string.h>
 #include <signal.h>
+#include <netdb.h>
+#include <ifaddrs.h>
 #include "eflash.h"
 #include "bootp_server.h"
 
@@ -63,6 +63,9 @@ static const char g_pcProgramHelp[] =
 "\n"
 "Required options:\n"
 "  -i addr, --ip=addr     IP address of remote device to program,\n"
+"                         in dotted-decimal notation\n"
+"                         (e.g. 169.254.19.63)\n"
+"  -l addr, --myip=addr   IP address of this local host,\n"
 "                         in dotted-decimal notation\n"
 "                         (e.g. 169.254.19.63)\n"
 "  -m addr, --mac=addr    MAC address of remote device to program,\n"
@@ -104,6 +107,7 @@ unsigned char g_pucRemoteMAC[6] = {0, 0, 0, 0, 0, 0};
 //
 //*****************************************************************************
 unsigned long g_ulRemoteAddress = 0;
+unsigned long g_ulLocalAddress = 0;
 
 //*****************************************************************************
 //
@@ -230,6 +234,7 @@ ParseOptions(int argc, char **argv)
         //
         {"mac",     required_argument, 0,              'm'},
         {"ip",      required_argument, 0,              'i'},
+        {"myip",    required_argument, 0,              'l'},
 
         //
         // Terminating Element of the array
@@ -246,7 +251,7 @@ ParseOptions(int argc, char **argv)
     // used for the file, mac and ip parameters and will be processed
     // below by the same case statement.
     //
-    while((iOption = getopt_long(argc, argv, "m:i:", sLongOptions,
+    while((iOption = getopt_long(argc, argv, "m:i:l:", sLongOptions,
                                  &iOptionIndex)) != -1)
     {
         //
@@ -296,12 +301,25 @@ ParseOptions(int argc, char **argv)
                 iReturnCode = AddressToBytes(optarg, &g_ulRemoteAddress, 4, 10);
                 if(iReturnCode != 4)
                 {
-                    EPRINTF(("Error Processing IP (%d)\n", iReturnCode));
+                    EPRINTF(("Error Processing Remote IP (%d)\n", iReturnCode));
                     DisplayHelp();
                     exit(-(__LINE__));
                 }
                 break;
 
+                //
+                // --myip=string, -l string
+                //
+            case 'l':
+                iReturnCode = AddressToBytes(optarg, &g_ulLocalAddress, 4, 10);
+                if(iReturnCode != 4)
+                {
+                    EPRINTF(("Error Processing Local IP (%d)\n", iReturnCode));
+                    DisplayHelp();
+                    exit(-(__LINE__));
+                }
+                break;
+                
             //
             // Unrecognized option.
             //
@@ -370,11 +388,11 @@ StatusCallback(unsigned long ulPercent)
     //
     if(g_iOptVerbose == 1)
     {
-        printf("%% Complete: %3d%%\r", ulPercent);
+        printf("%% Complete: %3lu%%\r", ulPercent);
     }
     else if(g_iOptVerbose > 1)
     {
-        printf("%% Complete: %3d%%\n", ulPercent);
+        printf("%% Complete: %3lu%%\n", ulPercent);
     }
 }
 
@@ -410,10 +428,6 @@ SignalIntHandler(int iSignal)
 int
 main(int argc, char **argv)
 {
-    HOSTENT *pHostEnt;
-    WSADATA wsaData;
-    unsigned long ulLocalAddress;
-
     //
     // Parse the command line options.
     //
@@ -442,35 +456,12 @@ main(int argc, char **argv)
 	signal(SIGINT, SignalIntHandler);
 
     //
-    // Startup winsock.
-    //
-    VPRINTF(("Starting WINSOCK\n"));
-    if(WSAStartup(0x202, &wsaData) != 0)
-    {
-        EPRINTF(("Winsock Failed to Start\n"));
-        WSACleanup();
-        return(1);
-    }
-
-    //
-    // Determine what my local IP address is.
-    //
-    pHostEnt = gethostbyname("");
-    ulLocalAddress = ((struct in_addr *)*pHostEnt->h_addr_list)->s_addr;
-
-    //
     // Start the BOOTP/TFTP server to perform an update.
     //
     QPRINTF(("Starting BOOTP/TFTP Server ...\n"));
     StatusCallback(0);
-    StartBOOTPUpdate(g_pucRemoteMAC, ulLocalAddress, g_ulRemoteAddress,
+    StartBOOTPUpdate(g_pucRemoteMAC, g_ulLocalAddress, g_ulRemoteAddress,
                      g_pcFileName, StatusCallback);
-
-    //
-    // Cleanup winsock.
-    //
-    VPRINTF(("Closing WINSOCK\n"));
-    WSACleanup();
 
     //
     // Clean up and return.
